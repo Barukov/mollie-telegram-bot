@@ -7,19 +7,18 @@ const PORT = process.env.PORT || 3000;
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// 👉 отправка в Telegram
 async function sendTelegramMessage(text) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
   if (!botToken || !chatId) {
-    console.error("❌ Telegram env vars missing");
+    console.error("Telegram env vars missing");
     return;
   }
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 
-  const res = await fetch(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -30,67 +29,63 @@ async function sendTelegramMessage(text) {
     }),
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    console.error("❌ Telegram error:", err);
-  } else {
-    console.log("✅ Sent to Telegram");
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("Telegram sendMessage failed:", errText);
   }
 }
 
-// 👉 тест страница
 app.get("/", (req, res) => {
-  res.send("✅ BOT WORKING");
+  res.send("BOT WORKING");
 });
 
-// 👉 webhook от Mollie
 app.post("/webhook", async (req, res) => {
   try {
     const apiKey = process.env.MOLLIE_API_KEY;
-
     if (!apiKey) {
-      console.error("❌ NO API KEY");
-      return res.sendStatus(500);
+      console.error("Missing MOLLIE_API_KEY");
+      return res.status(200).send("OK");
+    }
+
+    const rawId = req.body?.id;
+
+    // ping / пустой тестовый запрос — просто отвечаем OK
+    if (!rawId) {
+      console.log("Webhook ping/test received");
+      return res.status(200).send("OK");
     }
 
     const mollie = createMollieClient({ apiKey });
+    const payment = await mollie.payments.get(rawId);
 
-    const paymentId = req.body.id;
+    console.log("Webhook payment:", payment.id, payment.status);
 
-    console.log("🔥 WEBHOOK:", paymentId);
-
-    if (!paymentId) {
-      return res.sendStatus(400);
-    }
-
-    const payment = await mollie.payments.get(paymentId);
-
-    console.log("STATUS:", payment.status);
-
-    // 👉 ВАЖНО: НЕ isPaid(), а status === "paid"
     if (payment.status === "paid") {
       const productName =
-        payment.metadata?.productName || "Unknown product";
+        payment.metadata && payment.metadata.productName
+          ? String(payment.metadata.productName)
+          : "Unknown product";
 
-      const amount = payment.amount.value;
-      const currency = payment.amount.currency;
+      const amount = payment.amount?.value ?? "unknown";
+      const currency = payment.amount?.currency ?? "EUR";
 
       const message =
         `💸 NEW PAYMENT!\n\n` +
         `📦 Product: ${productName}\n` +
         `💰 ${amount} ${currency}\n` +
-        `🆔 ${payment.id}`;
+        `🆔 ${payment.id}\n` +
+        `📌 Status: ${payment.status}`;
 
       await sendTelegramMessage(message);
     }
 
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("❌ WEBHOOK ERROR:", err);
-    res.sendStatus(500);
+    return res.status(200).send("OK");
+  } catch (error) {
+    console.error("Webhook error:", error);
+    return res.status(200).send("OK");
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
